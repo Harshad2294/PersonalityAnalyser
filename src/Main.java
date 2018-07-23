@@ -1,5 +1,7 @@
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import functions.ARFFParser;
 import functions.CSVParser;
@@ -17,28 +19,27 @@ public class Main {
 	public static Cleaner cleaner;
 	public static Progress progress;
 	public static CSVParser csvParser;
-	public static Initializer initializer;
+	public static Initializer controller;
 	public static SynonymOps syno;
 	public static HashMap<String, ArrayList<String>> synonyms;
 	public static ArrayList<HashMap<String, HashMap<String,Double>>> jobScores;
 	public static HashMap<String, ArrayList<Double>> bigFiveScores;
 
 	public static void initialize(){
-		dbr = initializer.getDbReader();
-		lex = initializer.getLex();
-		cleaner = initializer.getCleaner();
-		progress = initializer.getProgress();
+		dbr = controller.getDbReader();
+		lex = new LexicalAnalyzer();
+		cleaner = controller.getCleaner();
+		progress = controller.getProgress();
 		syno = new SynonymOps();
 	}
 
-	@SuppressWarnings({ "unchecked", "rawtypes" })
 	public static void main(String[] args) throws InterruptedException {
-		//long start = System.currentTimeMillis();
-		initializer = new Initializer();
+		long start = System.currentTimeMillis();
+		controller = new Initializer();
 		initialize();
 		ArrayList<JobAd> jobs = new ArrayList(readFromDB());
 		Thread t = new Thread(new Runnable() {
-			
+
 			@Override
 			public void run() {
 				readFromCSV();
@@ -48,12 +49,13 @@ public class Main {
 		t.start();
 		jobs = new ArrayList(cleanParagraphs(jobs));
 		t.join();
+		t.stop();
 		lexicalAnalyser(jobs);
 		calculateBigFive(jobs);
 		writeARFF();
 		System.out.println("Program executed successfully.");
-		//long end = System.currentTimeMillis();
-		//System.out.println((end-start)/1000+"secs");
+		long end = System.currentTimeMillis();
+		System.out.println((end-start)/1000+"secs");
 	}
 
 	private static void calculateBigFive(ArrayList<JobAd> jobs) {
@@ -95,6 +97,7 @@ public class Main {
 	}
 
 	private static void getAllSynonyms() {
+		//progress.printProgress("Downloading synonyms for keywords");
 		synonyms = new HashMap<>();
 		ArrayList<String> keywords = new ArrayList<>(csvParser.getKeywords());
 		for(String key: keywords){
@@ -102,15 +105,15 @@ public class Main {
 			{
 				ArrayList<String> tt = new ArrayList<>();
 				tt.add(key);
-				//synonyms.put(key, tt);
 				synonyms.put(key, syno.findSimilar(key));
 			}catch (Exception e) {e.printStackTrace();
 			}
 		}
+		//progress.stopProgress();
 	}
 
 	///////////////////////////		Lexical Analyzer	///////////////////////////
-	@SuppressWarnings({ "unchecked", "rawtypes" })
+	@SuppressWarnings({ "rawtypes", "unchecked" })
 	private static void lexicalAnalyser(ArrayList<JobAd> jobs){
 		System.out.println("Lexical Analysis progress");
 		progress.updateTasks(jobs.size());
@@ -155,13 +158,12 @@ public class Main {
 
 	///////////////////////////////		Reading from CSV	///////////////////////	
 	private static void readFromCSV() {
-		csvParser = initializer.getCSVParser();
+		csvParser = controller.getCSVParser();
 		csvParser.readCSV();
 	}
 	///////////////////////////////////////////////////////////////////////////////
 
 	///////////////////////////////		Reading from DB 	///////////////////////	
-	@SuppressWarnings({ "rawtypes", "unchecked" })
 	private static ArrayList<String> readFromDB()
 	{
 		progress.printProgress("Reading from database");
@@ -178,12 +180,12 @@ public class Main {
 		System.out.println("Cleaning progress");
 		ArrayList<JobAd> newJobs = new ArrayList<>();
 		progress.updateTasks(jobs.size());
-		double s1 = jobs.size()/2;
-		int s2 = jobs.size()- (int)(s1);
+		int s1 = (int)(jobs.size()/4);
+		int rem = (int)(jobs.size()%4);
 		Thread t1 = new Thread(new Runnable() {
 			@Override
 			public void run() {
-				for(int i=0;i<s2;i++)
+				for(int i=0;i<s1;i++)
 				{
 					JobAd tempJob = cleaner.clean(jobs.get(i));
 					progress.update();
@@ -194,20 +196,51 @@ public class Main {
 		Thread t2 = new Thread(new Runnable() {
 			@Override
 			public void run() {
-				for(int i=s2;i<jobs.size();i++)
+				for(int i=s1;i<(2*s1);i++)
 				{
 					JobAd tempJob = cleaner.clean(jobs.get(i));
 					progress.update();
 					newJobs.add(tempJob);
 				}
 			}
-		});		
+		});
+		Thread t3 = new Thread(new Runnable() {
+			@Override
+			public void run() {
+				for(int i=2*s1;i<(3*s1);i++)
+				{
+					JobAd tempJob = cleaner.clean(jobs.get(i));
+					progress.update();
+					newJobs.add(tempJob);
+				}
+			}
+		});
+		Thread t4 = new Thread(new Runnable() {
+			@Override
+			public void run() {
+				for(int i=3*s1;i<(4*s1+rem);i++)
+				{
+					JobAd tempJob = cleaner.clean(jobs.get(i));
+					progress.update();
+					newJobs.add(tempJob);
+				}
+			}
+		});
+		
 		t1.start();
 		t2.start();
+		t3.start();
+		t4.start();
 		try
 		{
-		t1.join();
-		t2.join();
+			t1.join();
+			t1.interrupt();
+			t2.join();
+			t2.interrupt();
+			t3.join();
+			t3.interrupt();
+			t4.join();
+			t4.interrupt();
 		}catch (Exception e) {e.printStackTrace();}
 		System.out.println();
 		cleaner.recoverErr();
